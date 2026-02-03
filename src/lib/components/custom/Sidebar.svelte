@@ -36,26 +36,13 @@
 </script>
 
 <aside class={cn(
-  "fixed left-0 top-0 z-40 h-screen w-64",
+  "w-64 h-full",
   "bg-card border-r border-border",
-  "flex flex-col",
+  "flex flex-col flex-shrink-0",
   className
 )}>
-  <!-- Logo -->
-  <div class="flex h-16 items-center border-b border-border px-6">
-    <div class="flex items-center gap-3">
-      <div class="flex h-10 w-10 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-        <HardDrive class="h-6 w-6" />
-      </div>
-      <div>
-        <h1 class="font-semibold text-lg text-foreground">USB Manager</h1>
-        <p class="text-xs text-muted-foreground">Forensic Tracker</p>
-      </div>
-    </div>
-  </div>
-  
   <!-- Navigation -->
-  <nav class="flex-1 space-y-1 p-4">
+  <nav class="flex-1 space-y-1 p-4 pt-6">
     {#each navItems as item}
       <a
         href={item.href}
@@ -74,16 +61,4 @@
     {/each}
   </nav>
   
-  <!-- Footer -->
-  <div class="border-t border-border p-4">
-    <div class="flex items-center gap-3 rounded-lg bg-muted/50 px-3 py-2">
-      <div class="h-8 w-8 rounded-full bg-primary/20 flex items-center justify-center">
-        <Settings class="h-4 w-4 text-primary" />
-      </div>
-      <div class="flex-1 min-w-0">
-        <p class="text-sm font-medium text-foreground truncate">USB Manager</p>
-        <p class="text-xs text-muted-foreground">v0.1.0</p>
-      </div>
-    </div>
-  </div>
 </aside>
