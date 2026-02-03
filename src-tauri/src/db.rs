@@ -345,6 +345,120 @@ impl Database {
 
         Ok((total_files, total_folders))
     }
+
+    // Obtener snapshots del último CONNECT de un dispositivo específico
+    pub fn get_latest_device_snapshots(&self, device_id: &str) -> Result<(i64, Vec<FileSnapshot>)> {
+        let conn = self.conn.lock().unwrap();
+
+        // Obtener el último activity_log CONNECT para este dispositivo
+        let activity_id: Option<i64> = conn
+            .query_row(
+                "SELECT id FROM activity_log 
+             WHERE device_id = ?1 AND event_type = 'CONNECT'
+             ORDER BY timestamp DESC
+             LIMIT 1",
+                params![device_id],
+                |row| row.get(0),
+            )
+            .ok();
+
+        match activity_id {
+            Some(id) => {
+                let mut stmt = conn.prepare(
+                    "SELECT id, activity_log_id, file_path, file_name, file_extension, file_size, is_folder
+                     FROM file_snapshots 
+                     WHERE activity_log_id = ?1
+                     ORDER BY file_path"
+                )?;
+
+                let snapshot_iter = stmt.query_map(params![id], |row| {
+                    Ok(FileSnapshot {
+                        id: row.get(0)?,
+                        activity_log_id: row.get(1)?,
+                        file_path: row.get(2)?,
+                        file_name: row.get(3)?,
+                        file_extension: row.get(4)?,
+                        file_size: row.get(5)?,
+                        is_folder: row.get(6)?,
+                    })
+                })?;
+
+                let mut snapshots = Vec::new();
+                for snapshot in snapshot_iter {
+                    snapshots.push(snapshot?);
+                }
+
+                println!(
+                    "[DB] Found {} snapshots for device {} (activity_id: {})",
+                    snapshots.len(),
+                    device_id,
+                    id
+                );
+                Ok((id, snapshots))
+            }
+            None => {
+                println!("[DB] No CONNECT activity found for device {}", device_id);
+                Ok((0, Vec::new()))
+            }
+        }
+    }
+
+    // Obtener todos los snapshots de un dispositivo (de todos sus connections)
+    pub fn get_all_device_snapshots(
+        &self,
+        device_id: &str,
+    ) -> Result<Vec<(i64, String, Vec<FileSnapshot>)>> {
+        let conn = self.conn.lock().unwrap();
+
+        let mut stmt = conn.prepare(
+            "SELECT al.id, al.timestamp 
+             FROM activity_log al
+             WHERE al.device_id = ?1 AND al.event_type = 'CONNECT'
+             ORDER BY al.timestamp DESC",
+        )?;
+
+        let activity_iter = stmt.query_map(params![device_id], |row| {
+            Ok((row.get::<_, i64>(0)?, row.get::<_, String>(1)?))
+        })?;
+
+        let mut results = Vec::new();
+        for activity_result in activity_iter {
+            let (activity_id, timestamp) = activity_result?;
+
+            let mut snapshot_stmt = conn.prepare(
+                "SELECT id, activity_log_id, file_path, file_name, file_extension, file_size, is_folder
+                 FROM file_snapshots 
+                 WHERE activity_log_id = ?1
+                 ORDER BY file_path"
+            )?;
+
+            let snapshot_iter = snapshot_stmt.query_map(params![activity_id], |row| {
+                Ok(FileSnapshot {
+                    id: row.get(0)?,
+                    activity_log_id: row.get(1)?,
+                    file_path: row.get(2)?,
+                    file_name: row.get(3)?,
+                    file_extension: row.get(4)?,
+                    file_size: row.get(5)?,
+                    is_folder: row.get(6)?,
+                })
+            })?;
+
+            let mut snapshots = Vec::new();
+            for snapshot in snapshot_iter {
+                snapshots.push(snapshot?);
+            }
+
+            results.push((activity_id, timestamp, snapshots));
+        }
+
+        println!(
+            "[DB] Found {} connection events for device {}",
+            results.len(),
+            device_id
+        );
+        Ok(results)
+    }
 }
 
 // Singleton para acceso global

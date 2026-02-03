@@ -8,6 +8,8 @@ use usb_monitor::{
     get_device_history,
     get_registered_devices,
     get_file_snapshots,
+    get_device_files,
+    get_device_all_scans,
 };
 use db::init_database;
 use tauri::Manager;
@@ -29,6 +31,8 @@ pub fn run() {
             get_device_history,
             get_registered_devices,
             get_file_snapshots,
+            get_device_files,
+            get_device_all_scans,
         ])
         .setup(|app| {
             println!("[App] Setting up USB Manager with persistence...");

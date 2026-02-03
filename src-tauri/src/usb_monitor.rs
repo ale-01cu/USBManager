@@ -423,6 +423,66 @@ pub async fn get_file_snapshots(activity_log_id: i64) -> Result<serde_json::Valu
     }
 }
 
+#[tauri::command]
+pub async fn get_device_files(device_id: String) -> Result<serde_json::Value, String> {
+    if let Some(ref db) = get_database() {
+        match db.get_latest_device_snapshots(&device_id) {
+            Ok((activity_id, snapshots)) => {
+                let (files, folders) = if activity_id > 0 {
+                    db.get_scan_stats(activity_id).unwrap_or((0, 0))
+                } else {
+                    (0, 0)
+                };
+                
+                Ok(serde_json::json!({
+                    "success": true,
+                    "device_id": device_id,
+                    "activity_id": activity_id,
+                    "snapshots": snapshots,
+                    "stats": {
+                        "total_files": files,
+                        "total_folders": folders,
+                    }
+                }))
+            }
+            Err(e) => Err(format!("Database error: {}", e)),
+        }
+    } else {
+        Err("Database not initialized".to_string())
+    }
+}
+
+#[tauri::command]
+pub async fn get_device_all_scans(device_id: String) -> Result<serde_json::Value, String> {
+    if let Some(ref db) = get_database() {
+        match db.get_all_device_snapshots(&device_id) {
+            Ok(results) => {
+                let scans: Vec<serde_json::Value> = results.into_iter().map(|(activity_id, timestamp, snapshots)| {
+                    let file_count = snapshots.iter().filter(|s| !s.is_folder).count();
+                    let folder_count = snapshots.iter().filter(|s| s.is_folder).count();
+                    
+                    serde_json::json!({
+                        "activity_id": activity_id,
+                        "timestamp": timestamp,
+                        "snapshot_count": snapshots.len(),
+                        "file_count": file_count,
+                        "folder_count": folder_count,
+                    })
+                }).collect();
+                
+                Ok(serde_json::json!({
+                    "success": true,
+                    "device_id": device_id,
+                    "scans": scans,
+                }))
+            }
+            Err(e) => Err(format!("Database error: {}", e)),
+        }
+    } else {
+        Err("Database not initialized".to_string())
+    }
+}
+
 impl PartialEq for UsbDevice {
     fn eq(&self, other: &Self) -> bool {
         self.vendor_id == other.vendor_id && 
