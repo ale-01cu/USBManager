@@ -10,12 +10,33 @@
     product_name?: string;
     manufacturer_name?: string;
     serial_number?: string;
+    mount_point?: string;
+    total_space?: number;
+  }
+
+  interface ActivityLog {
+    id: number;
+    device_id: string;
+    event_type: "CONNECT" | "DISCONNECT";
+    timestamp: string;
+  }
+
+  interface RegisteredDevice {
+    serial_number: string;
+    vendor_id: number;
+    product_id: number;
+    name?: string;
+    manufacturer?: string;
+    total_capacity?: number;
   }
 
   let name = $state("");
   let greetMsg = $state("");
   let connectedDevices = $state<UsbDevice[]>([]);
   let eventLog = $state<string[]>([]);
+  let activityHistory = $state<ActivityLog[]>([]);
+  let registeredDevices = $state<RegisteredDevice[]>([]);
+  let selectedDevice = $state<string | null>(null);
 
   function addEvent(message: string) {
     const timestamp = new Date().toLocaleTimeString();
@@ -40,19 +61,60 @@
     }
   }
 
+  async function loadActivityHistory() {
+    try {
+      const result = await invoke<{ success: boolean; history: ActivityLog[] }>("get_device_history", { limit: 50 });
+      if (result.success) {
+        activityHistory = result.history;
+        addEvent(`Loaded ${result.history.length} activity records`);
+      }
+    } catch (error) {
+      console.error("Failed to load activity history:", error);
+      addEvent("Failed to load activity history from database");
+    }
+  }
+
+  async function loadRegisteredDevices() {
+    try {
+      const result = await invoke<{ success: boolean; devices: RegisteredDevice[] }>("get_registered_devices");
+      if (result.success) {
+        registeredDevices = result.devices;
+        addEvent(`Loaded ${result.devices.length} registered devices`);
+      }
+    } catch (error) {
+      console.error("Failed to load registered devices:", error);
+    }
+  }
+
   function formatDevice(device: UsbDevice): string {
     const name = device.product_name || device.manufacturer_name || `Device ${device.id}`;
     return `${name} (VID: ${device.vendor_id.toString(16).padStart(4, '0').toUpperCase()}, PID: ${device.product_id.toString(16).padStart(4, '0').toUpperCase()})`;
   }
 
+  function formatBytes(bytes: number | undefined): string {
+    if (bytes === undefined) return "Unknown";
+    const sizes = ["Bytes", "KB", "MB", "GB", "TB"];
+    if (bytes === 0) return "0 Bytes";
+    const i = Math.floor(Math.log(bytes) / Math.log(1024));
+    return Math.round(bytes / Math.pow(1024, i) * 100) / 100 + " " + sizes[i];
+  }
+
+  function formatDate(dateStr: string): string {
+    return new Date(dateStr).toLocaleString();
+  }
+
   onMount(async () => {
     await loadConnectedDevices();
+    await loadActivityHistory();
+    await loadRegisteredDevices();
     
     // Listen for USB connect events
     await listen<UsbDevice>("usb-connected", (event) => {
       const device = event.payload;
       addEvent(`USB Connected: ${formatDevice(device)}`);
       loadConnectedDevices();
+      loadActivityHistory();
+      loadRegisteredDevices();
     });
     
     // Listen for USB disconnect events
@@ -60,6 +122,13 @@
       const device = event.payload;
       addEvent(`USB Disconnected: ${formatDevice(device)}`);
       loadConnectedDevices();
+      loadActivityHistory();
+    });
+
+    // Listen for scan complete events
+    await listen<{ device_id: string; files_scanned: number; folders_scanned: number }>("usb-scan-complete", (event) => {
+      const data = event.payload;
+      addEvent(`Scan complete: ${data.files_scanned} files, ${data.folders_scanned} folders scanned`);
     });
   });
 </script>
@@ -114,6 +183,54 @@
         {/each}
       {:else}
         <p>No USB events yet. Connect or disconnect a USB device to see events.</p>
+      {/if}
+    </div>
+  </div>
+
+  <div class="usb-section">
+    <h2>Registered Devices</h2>
+    <button onclick={loadRegisteredDevices}>Refresh</button>
+    <div class="device-list">
+      {#if registeredDevices.length > 0}
+        {#each registeredDevices as device}
+          <div class="device-card">
+            <div class="device-name">
+              {device.name || device.manufacturer || "Unknown Device"}
+            </div>
+            <div class="device-details">
+              <strong>Serial:</strong> {device.serial_number}<br>
+              <strong>Vendor ID:</strong> {device.vendor_id.toString(16).padStart(4, '0').toUpperCase()}<br>
+              <strong>Product ID:</strong> {device.product_id.toString(16).padStart(4, '0').toUpperCase()}<br>
+              {#if device.total_capacity}
+                <strong>Capacity:</strong> {formatBytes(device.total_capacity)}
+              {/if}
+            </div>
+          </div>
+        {/each}
+      {:else}
+        <p>No registered devices in database</p>
+      {/if}
+    </div>
+  </div>
+
+  <div class="usb-section">
+    <h2>Activity History</h2>
+    <button onclick={loadActivityHistory}>Refresh</button>
+    <div class="history-list">
+      {#if activityHistory.length > 0}
+        {#each activityHistory as activity}
+          <div class="history-item {activity.event_type.toLowerCase()}">
+            <div class="history-header">
+              <span class="event-badge {activity.event_type.toLowerCase()}">
+                {activity.event_type}
+              </span>
+              <span class="timestamp">{formatDate(activity.timestamp)}</span>
+            </div>
+            <div class="device-id">Device: {activity.device_id}</div>
+          </div>
+        {/each}
+      {:else}
+        <p>No activity history in database</p>
       {/if}
     </div>
   </div>
@@ -190,6 +307,69 @@
 
 .event-item:last-child {
   border-bottom: none;
+}
+
+.history-list {
+  margin-top: 15px;
+  max-height: 300px;
+  overflow-y: auto;
+  border: 1px solid #ccc;
+  background-color: white;
+}
+
+.history-item {
+  padding: 12px;
+  border-bottom: 1px solid #eee;
+  transition: background-color 0.2s;
+}
+
+.history-item:hover {
+  background-color: #f5f5f5;
+}
+
+.history-item.connect {
+  border-left: 4px solid #4CAF50;
+}
+
+.history-item.disconnect {
+  border-left: 4px solid #f44336;
+}
+
+.history-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 4px;
+}
+
+.event-badge {
+  padding: 2px 8px;
+  border-radius: 12px;
+  font-size: 0.75em;
+  font-weight: bold;
+  text-transform: uppercase;
+}
+
+.event-badge.connect {
+  background-color: #4CAF50;
+  color: white;
+}
+
+.event-badge.disconnect {
+  background-color: #f44336;
+  color: white;
+}
+
+.timestamp {
+  font-size: 0.85em;
+  color: #666;
+  font-family: monospace;
+}
+
+.device-id {
+  font-size: 0.9em;
+  color: #333;
+  word-break: break-all;
 }
 
 .test-section {
