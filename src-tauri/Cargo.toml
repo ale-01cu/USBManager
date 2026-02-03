@@ -29,5 +29,6 @@ walkdir = "2"
 sysinfo = "0.32"
 chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4"] }
+notify = "6.1.1"
 
 

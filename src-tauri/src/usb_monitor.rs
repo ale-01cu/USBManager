@@ -6,6 +6,7 @@ use tauri::{AppHandle, Emitter};
 use sysinfo::Disks;
 use crate::db::{Database, Device as DbDevice, EventType, get_database};
 use crate::file_scanner::FileScanner;
+use crate::file_watcher::FileWatcher;
 
 #[derive(Debug, serde::Serialize, serde::Deserialize, Clone)]
 pub struct UsbDevice {
@@ -23,7 +24,8 @@ pub struct UsbMonitor {
     pub devices: Arc<Mutex<Vec<UsbDevice>>>,
     pub app_handle: Option<AppHandle>,
     pub db: Option<Arc<Database>>,
-    pub device_mount_map: Arc<Mutex<HashMap<String, String>>>, 
+    pub device_mount_map: Arc<Mutex<HashMap<String, String>>>,
+    pub active_watchers: Arc<Mutex<HashMap<String, notify::RecommendedWatcher>>>,
 }
 
 impl UsbMonitor {
@@ -31,8 +33,9 @@ impl UsbMonitor {
         Self {
             devices: Arc::new(Mutex::new(Vec::new())),
             app_handle: None,
-            db: None, // Cambiado para que se asigne explícitamente
+            db: None,
             device_mount_map: Arc::new(Mutex::new(HashMap::new())),
+            active_watchers: Arc::new(Mutex::new(HashMap::new())),
         }
     }
 
@@ -168,7 +171,7 @@ impl UsbMonitor {
 
     fn handle_device_connected(&self, device: &UsbDevice) {
         let device_id = device.serial_number.clone().unwrap_or_default();
-        
+
         println!("[USB] Device Logic Connected: {} (Mount: {:?})", device_id, device.mount_point);
 
         if let Some(ref db) = self.db {
@@ -189,12 +192,24 @@ impl UsbMonitor {
                 Ok(activity_id) => {
                     if let Some(ref mount) = device.mount_point {
                         self.device_mount_map.lock().unwrap().insert(device_id.clone(), mount.clone());
-                        
+
                         let mount_point = mount.clone();
                         let db_clone = db.clone();
                         let app_handle_clone = self.app_handle.clone();
                         let dev_id_clone = device_id.clone();
-                        
+
+                        match FileWatcher::watch_mount(
+                            mount_point.clone(),
+                            activity_id,
+                            db_clone.clone(),
+                            app_handle_clone.clone().unwrap(),
+                        ) {
+                            Ok(watcher) => {
+                                self.active_watchers.lock().unwrap().insert(device_id.clone(), watcher);
+                            }
+                            Err(e) => println!("[Watcher] No se pudo iniciar: {}", e),
+                        }
+
                         tokio::spawn(async move {
                             println!("[Scanner] Starting scan for {}", mount_point);
                             match FileScanner::scan_and_save(&mount_point, activity_id, db_clone).await {
@@ -227,6 +242,8 @@ impl UsbMonitor {
             let _ = db.create_activity_log(&device_id, EventType::Disconnect);
             self.device_mount_map.lock().unwrap().remove(&device_id);
         }
+
+        self.active_watchers.lock().unwrap().remove(&device_id);
     }
 
     pub fn emit_events(&self) {

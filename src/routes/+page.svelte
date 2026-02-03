@@ -2,7 +2,7 @@
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
   import { onMount, onDestroy } from "svelte";
-  import { Button } from "$lib/components/ui";
+  import { Button, Badge } from "$lib/components/ui";
   import KpiCard from "$lib/components/custom/KpiCard.svelte";
   import ActivityFeed from "$lib/components/custom/ActivityFeed.svelte";
   import {
@@ -47,6 +47,7 @@
   let devices = $state<Device[]>([]);
   let activities = $state<ActivityLog[]>([]);
   let connectedDevices = $state<UsbDevice[]>([]);
+  let realTimeCopies = $state<any[]>([]);
 
   let isLoading = $state(true);
   let isFetching = false;
@@ -132,12 +133,18 @@
     const unlistenConnected = listen<UsbDevice>("usb-connected", () => loadData());
     const unlistenDisconnected = listen<UsbDevice>("usb-disconnected", () => loadData());
 
+    const unlistenCopy = listen("file-copy-detected", (event: any) => {
+      realTimeCopies = [event.payload, ...realTimeCopies].slice(0, 10);
+      loadData();
+    });
+
     intervalId = setInterval(loadData, 5000);
 
     return () => {
       clearInterval(intervalId);
       unlistenConnected.then(f => f());
       unlistenDisconnected.then(f => f());
+      unlistenCopy.then(f => f());
     };
   });
 
@@ -225,10 +232,29 @@
                     {device.product_name || device.manufacturer_name || "Unknown Device"}
                   </p>
                   <p class="text-xs text-muted-foreground">
-                    VID: {device.vendor_id.toString(16).padStart(4, '0').toUpperCase()} | 
+                    VID: {device.vendor_id.toString(16).padStart(4, '0').toUpperCase()} |
                     PID: {device.product_id.toString(16).padStart(4, '0').toUpperCase()}
                   </p>
                 </div>
+              </div>
+            {/each}
+          </div>
+        {/if}
+      </div>
+
+      <div class="mt-6 bg-card border border-warning/20 rounded-lg p-4">
+        <h3 class="text-sm font-bold text-warning flex items-center gap-2 mb-3">
+          <Activity class="h-4 w-4" />
+          MONITOREO DE COPIAS (Venta en curso)
+        </h3>
+        {#if realTimeCopies.length === 0}
+          <p class="text-xs text-muted-foreground italic">Esperando transferencia de archivos...</p>
+        {:else}
+          <div class="space-y-2">
+            {#each realTimeCopies as file}
+              <div class="flex justify-between items-center text-xs p-2 bg-accent/30 rounded">
+                <span class="truncate max-w-[200px]">{file.file_name}</span>
+                <Badge variant="outline">{(file.file_size / 1024 / 1024).toFixed(2)} MB</Badge>
               </div>
             {/each}
           </div>

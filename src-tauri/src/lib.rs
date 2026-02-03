@@ -1,6 +1,7 @@
 mod usb_monitor;
 mod db;
 mod file_scanner;
+mod file_watcher;
 
 use std::sync::Arc;
 use usb_monitor::{
