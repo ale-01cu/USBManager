@@ -1,18 +1,71 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
+  import { listen } from "@tauri-apps/api/event";
+  import { onMount } from "svelte";
+
+  interface UsbDevice {
+    id: number;
+    vendor_id: number;
+    product_id: number;
+    product_name?: string;
+    manufacturer_name?: string;
+    serial_number?: string;
+  }
 
   let name = $state("");
   let greetMsg = $state("");
+  let connectedDevices = $state<UsbDevice[]>([]);
+  let eventLog = $state<string[]>([]);
+
+  function addEvent(message: string) {
+    const timestamp = new Date().toLocaleTimeString();
+    eventLog = [`[${timestamp}] ${message}`, ...eventLog];
+    if (eventLog.length > 20) {
+      eventLog = eventLog.slice(0, 20);
+    }
+  }
 
   async function greet(event: Event) {
     event.preventDefault();
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
     greetMsg = await invoke("greet", { name });
   }
+
+  async function loadConnectedDevices() {
+    try {
+      const devices = await invoke<UsbDevice[]>("get_connected_devices");
+      connectedDevices = devices;
+      addEvent(`Loaded ${devices.length} connected devices`);
+    } catch (error) {
+      console.error("Failed to load connected devices:", error);
+    }
+  }
+
+  function formatDevice(device: UsbDevice): string {
+    const name = device.product_name || device.manufacturer_name || `Device ${device.id}`;
+    return `${name} (VID: ${device.vendor_id.toString(16).padStart(4, '0').toUpperCase()}, PID: ${device.product_id.toString(16).padStart(4, '0').toUpperCase()})`;
+  }
+
+  onMount(async () => {
+    await loadConnectedDevices();
+    
+    // Listen for USB connect events
+    await listen<UsbDevice>("usb-connected", (event) => {
+      const device = event.payload;
+      addEvent(`USB Connected: ${formatDevice(device)}`);
+      loadConnectedDevices();
+    });
+    
+    // Listen for USB disconnect events
+    await listen<UsbDevice>("usb-disconnected", (event) => {
+      const device = event.payload;
+      addEvent(`USB Disconnected: ${formatDevice(device)}`);
+      loadConnectedDevices();
+    });
+  });
 </script>
 
 <main class="container">
-  <h1>Welcome to Tauri + Svelte</h1>
+  <h1>USB Device Manager</h1>
 
   <div class="row">
     <a href="https://vite.dev" target="_blank">
@@ -25,13 +78,54 @@
       <img src="/svelte.svg" class="logo svelte-kit" alt="SvelteKit Logo" />
     </a>
   </div>
-  <p>Click on the Tauri, Vite, and SvelteKit logos to learn more.</p>
 
-  <form class="row" onsubmit={greet}>
-    <input id="greet-input" placeholder="Enter a name..." bind:value={name} />
-    <button type="submit">Greet</button>
-  </form>
-  <p>{greetMsg}</p>
+  <div class="usb-section">
+    <h2>Connected USB Devices</h2>
+    <div class="device-list">
+      {#if connectedDevices.length > 0}
+        {#each connectedDevices as device}
+          <div class="device-card">
+            <div class="device-name">
+              {device.product_name || device.manufacturer_name || `Unknown Device`}
+            </div>
+            <div class="device-details">
+              <strong>ID:</strong> {device.id}<br>
+              <strong>Vendor ID:</strong> {device.vendor_id.toString(16).padStart(4, '0').toUpperCase()}<br>
+              <strong>Product ID:</strong> {device.product_id.toString(16).padStart(4, '0').toUpperCase()}<br>
+              {#if device.serial_number}
+                <strong>Serial:</strong> {device.serial_number}<br>
+              {/if}
+            </div>
+          </div>
+        {/each}
+      {:else}
+        <p>No USB devices connected</p>
+      {/if}
+    </div>
+  </div>
+
+  <div class="usb-section">
+    <h2>Event Log</h2>
+    <button onclick={() => eventLog = []}>Clear Log</button>
+    <div class="event-log">
+      {#if eventLog.length > 0}
+        {#each eventLog as event}
+          <div class="event-item">{event}</div>
+        {/each}
+      {:else}
+        <p>No USB events yet. Connect or disconnect a USB device to see events.</p>
+      {/if}
+    </div>
+  </div>
+
+  <div class="test-section">
+    <h2>Test Greeting</h2>
+    <form class="row" onsubmit={greet}>
+      <input id="greet-input" placeholder="Enter a name..." bind:value={name} />
+      <button type="submit">Greet</button>
+    </form>
+    <p>{greetMsg}</p>
+  </div>
 </main>
 
 <style>
@@ -41,6 +135,69 @@
 
 .logo.svelte-kit:hover {
   filter: drop-shadow(0 0 2em #ff3e00);
+}
+
+.usb-section {
+  margin: 20px 0;
+  padding: 20px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background-color: #f9f9f9;
+}
+
+.device-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
+  gap: 15px;
+  margin-top: 15px;
+}
+
+.device-card {
+  padding: 15px;
+  border: 1px solid #ccc;
+  border-radius: 8px;
+  background-color: white;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+}
+
+.device-name {
+  font-weight: bold;
+  font-size: 1.1em;
+  margin-bottom: 8px;
+  color: #333;
+}
+
+.device-details {
+  font-size: 0.9em;
+  color: #666;
+  line-height: 1.4;
+}
+
+.event-log {
+  margin-top: 15px;
+  max-height: 200px;
+  overflow-y: auto;
+  border: 1px solid #ccc;
+  background-color: white;
+}
+
+.event-item {
+  padding: 8px 12px;
+  border-bottom: 1px solid #eee;
+  font-family: monospace;
+  font-size: 0.9em;
+}
+
+.event-item:last-child {
+  border-bottom: none;
+}
+
+.test-section {
+  margin-top: 30px;
+  padding: 20px;
+  border: 1px solid #ddd;
+  border-radius: 8px;
+  background-color: #f0f8ff;
 }
 
 :root {
