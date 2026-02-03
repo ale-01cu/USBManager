@@ -1,19 +1,17 @@
 <script lang="ts">
   import { invoke } from "@tauri-apps/api/core";
   import { listen } from "@tauri-apps/api/event";
-  import { onMount } from "svelte";
+  import { onMount, onDestroy } from "svelte";
   import { Button } from "$lib/components/ui";
   import KpiCard from "$lib/components/custom/KpiCard.svelte";
   import ActivityFeed from "$lib/components/custom/ActivityFeed.svelte";
-  import { 
-    HardDrive, 
-    Activity, 
-    Clock, 
+  import {
+    HardDrive,
+    Activity,
     Usb,
     Loader2
   } from "lucide-svelte";
-  
-  // Types
+
   interface Device {
     serial_number: string;
     vendor_id: number;
@@ -22,39 +20,41 @@
     manufacturer?: string;
     total_capacity?: number;
   }
-  
+
   interface ActivityLog {
     id: number;
     device_id: string;
     event_type: "CONNECT" | "DISCONNECT";
     timestamp: string;
   }
-  
+
   interface UsbDevice {
-    id: number;
+    id: string;
     vendor_id: number;
     product_id: number;
     product_name?: string;
     manufacturer_name?: string;
     serial_number?: string;
   }
-  
+
   interface FeedEvent {
     id: number;
-    device_name: string;
-    event_type: "CONNECT" | "DISCONNECT" | "SCAN";
+    deviceName: string;
+    eventType: "CONNECT" | "DISCONNECT" | "SCAN";
     timestamp: string;
   }
-  
-  // State
+
   let devices = $state<Device[]>([]);
   let activities = $state<ActivityLog[]>([]);
   let connectedDevices = $state<UsbDevice[]>([]);
+
   let isLoading = $state(true);
+  let isFetching = false;
+  let intervalId: any;
+
   let lastEvent = $state<string | null>(null);
-  
-  // Derived KPI values
   let totalDevices = $derived(devices.length);
+
   let todayEvents = $derived(
     activities.filter(a => {
       const date = new Date(a.timestamp);
@@ -62,95 +62,91 @@
       return date.toDateString() === today.toDateString();
     }).length
   );
-  let connectedCount = $derived(connectedDevices.length);
-  
-  // Feed events
+
   let feedEvents = $derived<FeedEvent[]>(
     activities.slice(0, 10).map(a => {
       const device = devices.find(d => d.serial_number === a.device_id);
       return {
         id: a.id,
-        device_name: device?.name || device?.manufacturer || "Unknown Device",
-        event_type: a.event_type,
+        deviceName: device?.name || device?.manufacturer || "Unknown Device",
+        eventType: a.event_type,
         timestamp: a.timestamp
       };
     })
   );
-  
+
   async function loadData() {
+    if (isFetching) return;
+
     try {
-      isLoading = true;
-      
-      // Load registered devices
-      const devicesResult = await invoke<{ success: boolean; devices: Device[] }>(
-        "get_registered_devices"
-      );
+      isFetching = true;
+      // No poner isLoading = true aquí cada vez para evitar parpadeos en el refresh automático
+      if (devices.length === 0 && activities.length === 0) {
+        isLoading = true;
+      }
+
+      console.log("Fetching dashboard data...");
+      const [devicesResult, historyResult, connectedResult] = await Promise.all([
+        invoke<{ success: boolean; devices: Device[] }>("get_registered_devices").catch(e => {
+          console.error("Error fetching registered devices:", e);
+          return { success: false, devices: [] };
+        }),
+        invoke<{ success: boolean; history: ActivityLog[] }>("get_device_history", { limit: 50 }).catch(e => {
+          console.error("Error fetching history:", e);
+          return { success: false, history: [] };
+        }),
+        invoke<UsbDevice[]>("get_connected_devices").catch(e => {
+          console.error("Error fetching connected devices:", e);
+          return [];
+        })
+      ]);
+
+      console.log("Results:", { devicesResult, historyResult, connectedResult });
+
       if (devicesResult.success) {
         devices = devicesResult.devices;
       }
-      
-      // Load activity history
-      const historyResult = await invoke<{ success: boolean; history: ActivityLog[] }>(
-        "get_device_history", 
-        { limit: 50 }
-      );
+
       if (historyResult.success) {
         activities = historyResult.history;
       }
-      
-      // Load connected devices
-      const connectedResult = await invoke<UsbDevice[]>("get_connected_devices");
+
       connectedDevices = connectedResult;
-      
-      // Set last event
+
       if (activities.length > 0) {
         const lastActivity = activities[0];
         const device = devices.find(d => d.serial_number === lastActivity.device_id);
         lastEvent = device?.name || device?.manufacturer || "Unknown Device";
       }
-      
     } catch (error) {
       console.error("Failed to load dashboard data:", error);
     } finally {
       isLoading = false;
+      isFetching = false;
     }
   }
-  
-  function formatRelativeTime(timestamp: string): string {
-    const date = new Date(timestamp);
-    const now = new Date();
-    const diffMs = now.getTime() - date.getTime();
-    const diffMins = Math.floor(diffMs / 60000);
-    const diffHours = Math.floor(diffMs / 3600000);
-    const diffDays = Math.floor(diffMs / 86400000);
-    
-    if (diffMins < 1) return "just now";
-    if (diffMins < 60) return `${diffMins}m ago`;
-    if (diffHours < 24) return `${diffHours}h ago`;
-    if (diffDays < 7) return `${diffDays}d ago`;
-    return date.toLocaleDateString();
-  }
-  
+
   onMount(() => {
     loadData();
-    
-    // Listen for USB events
-    listen<UsbDevice>("usb-connected", () => {
-      loadData();
-    });
-    
-    listen<UsbDevice>("usb-disconnected", () => {
-      loadData();
-    });
-    
-    // Refresh every 5 seconds
-    const interval = setInterval(loadData, 5000);
-    return () => clearInterval(interval);
+
+    const unlistenConnected = listen<UsbDevice>("usb-connected", () => loadData());
+    const unlistenDisconnected = listen<UsbDevice>("usb-disconnected", () => loadData());
+
+    intervalId = setInterval(loadData, 5000);
+
+    return () => {
+      clearInterval(intervalId);
+      unlistenConnected.then(f => f());
+      unlistenDisconnected.then(f => f());
+    };
+  });
+
+  onDestroy(() => {
+    if (intervalId) clearInterval(intervalId);
   });
 </script>
 
 <div class="space-y-8">
-  <!-- Header -->
   <div class="flex items-center justify-between">
     <div>
       <h1 class="text-3xl font-bold text-foreground">Dashboard</h1>
@@ -165,8 +161,7 @@
       {/if}
     </Button>
   </div>
-  
-  <!-- KPI Cards -->
+
   <div class="grid grid-cols-1 md:grid-cols-3 gap-6">
     <KpiCard
       title="Devices Tracked"
@@ -174,7 +169,6 @@
       icon={HardDrive}
       subtitle="Total unique devices in database"
     />
-    
     <KpiCard
       title="Activity Today"
       value={todayEvents}
@@ -183,7 +177,6 @@
       trend={todayEvents > 0 ? "up" : undefined}
       trendValue={todayEvents > 0 ? "+" + todayEvents : undefined}
     />
-    
     <KpiCard
       title="Last Detection"
       value={lastEvent || "None"}
@@ -191,10 +184,8 @@
       subtitle={lastEvent ? "Recently detected device" : "No recent activity"}
     />
   </div>
-  
-  <!-- Two Column Layout -->
+
   <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
-    <!-- Activity Feed -->
     <div class="lg:col-span-2">
       <div class="bg-card border border-border rounded-lg p-6">
         <div class="flex items-center justify-between mb-6">
@@ -207,18 +198,15 @@
             <span class="text-sm text-muted-foreground">Live</span>
           </div>
         </div>
-        
         <ActivityFeed events={feedEvents} maxItems={15} />
       </div>
     </div>
-    
-    <!-- Connected Devices -->
+
     <div class="lg:col-span-1">
       <div class="bg-card border border-border rounded-lg p-6">
         <h2 class="text-xl font-semibold text-card-foreground mb-6">
           Currently Connected
         </h2>
-        
         {#if connectedDevices.length === 0}
           <div class="text-center py-8 text-muted-foreground">
             <Usb class="mx-auto h-12 w-12 mb-3 opacity-50" />

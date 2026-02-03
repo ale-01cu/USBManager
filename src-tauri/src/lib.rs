@@ -2,6 +2,7 @@ mod usb_monitor;
 mod db;
 mod file_scanner;
 
+use std::sync::Arc;
 use usb_monitor::{
     get_connected_devices, 
     start_usb_monitoring,
@@ -90,32 +91,40 @@ pub fn run() {
                     
                     // Iniciar monitoreo USB con DB
                     let app_handle = app.handle().clone();
+
+                    let mut monitor_to_start = usb_monitor::UsbMonitor::new();
+                    monitor_to_start.set_db(db.clone());
+                    monitor_to_start.set_app_handle(app_handle.clone());
+                    
+                    let shared_monitor = Arc::new(monitor_to_start);
+                    app.manage(shared_monitor.clone());
+
                     tauri::async_runtime::spawn(async move {
-                        // Crear monitor con DB
-                        let mut monitor = usb_monitor::UsbMonitor::new();
-                        monitor.set_db(db);
-                        monitor.set_app_handle(app_handle.clone());
-                        
                         // Scan inicial
-                        let devices = monitor.scan_devices();
+                        let devices = shared_monitor.scan_devices();
                         println!("[App] Initial scan found {} devices", devices.len());
-                        *monitor.devices.lock().unwrap() = devices;
+                        {
+                            let mut dev_lock = shared_monitor.devices.lock().unwrap();
+                            *dev_lock = devices;
+                        }
                         
                         // Iniciar loop de monitoreo
-                        monitor.start_monitoring().await;
+                        shared_monitor.start_monitoring_shared().await;
                     });
                 }
                 Err(e) => {
                     eprintln!("[App] Failed to initialize database: {}", e);
                     eprintln!("[App] Continuing without persistence...");
                     
-                    // Fallback: iniciar sin DB
                     let app_handle = app.handle().clone();
+                    let mut monitor_to_start = usb_monitor::UsbMonitor::new();
+                    monitor_to_start.set_app_handle(app_handle.clone());
+                    
+                    let shared_monitor = Arc::new(monitor_to_start);
+                    app.manage(shared_monitor.clone());
+
                     tauri::async_runtime::spawn(async move {
-                        match start_usb_monitoring(app_handle).await {
-                            Ok(msg) => println!("[App] {}", msg),
-                            Err(e) => eprintln!("[App] Failed to start USB monitoring: {}", e),
-                        }
+                        shared_monitor.start_monitoring_shared().await;
                     });
                 }
             }
